@@ -2,10 +2,10 @@ package models
 
 import "time"
 
-type CourseMode int
+type CourseMode int16
 
 const (
-	TeachingMode CourseMode = iota
+	TeachingMode CourseMode = iota + 1
 	PracticeMode
 )
 

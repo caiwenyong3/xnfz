@@ -24,8 +24,8 @@ func main() {
 		websocket.ServeWs(hub, w, r)
 	})
 
-	logger.Info("Server is running on :9090")
-	err := http.ListenAndServe(":9090", nil)
+	logger.Info("Server is running on :9091")
+	err := http.ListenAndServe(":9091", nil)
 	if err != nil {
 		logger.Fatal("ListenAndServe: ", zap.Error(err))
 	}

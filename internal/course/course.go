@@ -6,7 +6,7 @@ import (
 
 	"xnfz/pkg/models"
 
-	"github.com/google/uuid"
+	// "github.com/google/uuid"
 	"go.uber.org/zap"
 )
 
@@ -23,12 +23,12 @@ func NewManager(logger *zap.Logger) *Manager {
 	}
 }
 
-func (m *Manager) CreateCourse(name string, description string, mode models.CourseMode, duration time.Duration) *models.Course {
+func (m *Manager) CreateCourse(id string, name string, description string, mode models.CourseMode, duration time.Duration) *models.Course {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	course := &models.Course{
-		ID:          uuid.New().String(),
+		ID:          id,
 		Name:        name,
 		Description: description,
 		Mode:        mode,
@@ -49,16 +49,16 @@ func (m *Manager) GetCourse(courseID string) (*models.Course, bool) {
 	return course, ok
 }
 
-func (m *Manager) UpdateCourse(courseID string, name string, description string, mode models.CourseMode, duration time.Duration) bool {
+func (m *Manager) UpdateCourse(id string, name string, description string, mode models.CourseMode, duration time.Duration) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if course, ok := m.courses[courseID]; ok {
+	if course, ok := m.courses[id]; ok {
 		course.Name = name
 		course.Description = description
 		course.Mode = mode
 		course.Duration = duration
-		m.logger.Info("Updated course", zap.String("courseID", courseID))
+		m.logger.Info("Updated course", zap.String("courseID", id), zap.Int16("mode", int16(mode)))
 		return true
 	}
 
