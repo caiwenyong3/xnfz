@@ -3,6 +3,8 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+
+	// "fmt"
 	"log"
 	"net/url"
 	"os"
@@ -87,7 +89,7 @@ func main() {
 			case "heartbeat_response":
 				// 心跳响应不打印日志
 			case "object_manipulation":
-				log.Printf("Received object_manipulation message: %s", message)
+				// log.Printf("Received object_manipulation message: %s", message)
 				// 这里可以添加处理 object_manipulation 消息的逻辑
 				handleObjectManipulation(response.Data)
 			case "course_exit":
@@ -102,7 +104,7 @@ func main() {
 	// 启动键盘输入处理协程
 	go func() {
 		scanner := bufio.NewScanner(os.Stdin)
-		log.Println("Press '1' for course selection, '2' for course mode selection, '3' for object manipulation, '4' for course exit")
+		log.Println("Press '1' for course selection, '2' for course mode selection, '3' for object manipulation, '4' for course end, '5' for course exit")
 
 		for scanner.Scan() {
 			input := scanner.Text()
@@ -123,7 +125,7 @@ func main() {
 			case "2":
 				message := Message{
 					Type: "course_mode_selection",
-					Data: map[string]interface{}{"courseId": "1", "mode": 3},
+					Data: map[string]interface{}{"courseId": "1", "mode": 2},
 				}
 				err := c.WriteJSON(message)
 				if err != nil {
@@ -135,41 +137,39 @@ func main() {
 
 			case "3":
 				// 示例 Unity 物体变换数据
-				transformData := map[string]interface{}{
-					"dataAttachment": map[int32]interface{}{
-						1: map[string]interface{}{ // 物体 ID 为 1
-							"position": map[string]float64{
-								"x": 1.0,
-								"y": 2.0,
-								"z": 3.0,
-							},
-							"rotation": map[string]float64{
-								"x": 0.0,
-								"y": 90.0,
-								"z": 0.0,
-							},
-							"scale": map[string]float64{
-								"x": 1.0,
-								"y": 1.0,
-								"z": 1.0,
-							},
+				transformData := map[int32]interface{}{
+					970110: map[string]interface{}{ // 物体 ID 为 1
+						"position": map[string]float64{
+							"x": 0.03,
+							"y": 0.67,
+							"z": 0.38,
 						},
-						2: map[string]interface{}{ // 物体 ID 为 2
-							"position": map[string]float64{
-								"x": 4.0,
-								"y": 5.0,
-								"z": 6.0,
-							},
-							"rotation": map[string]float64{
-								"x": 0.0,
-								"y": 180.0,
-								"z": 0.0,
-							},
-							"scale": map[string]float64{
-								"x": 2.0,
-								"y": 2.0,
-								"z": 2.0,
-							},
+						"rotation": map[string]float64{
+							"x": 8.04,
+							"y": 182.24,
+							"z": 17.16,
+						},
+						"scale": map[string]float64{
+							"x": 1.0,
+							"y": 1.0,
+							"z": 1.0,
+						},
+					},
+					970036: map[string]interface{}{ // 物体 ID 为 2
+						"position": map[string]float64{
+							"x": 0.07,
+							"y": 0.93,
+							"z": 0.26,
+						},
+						"rotation": map[string]float64{
+							"x": 43.16,
+							"y": 176.65,
+							"z": 73.12,
+						},
+						"scale": map[string]float64{
+							"x": 1.0,
+							"y": 1.0,
+							"z": 1.0,
 						},
 					},
 				}
@@ -188,7 +188,8 @@ func main() {
 
 			case "4":
 				message := Message{
-					Type: "exit_course",
+					Type: "course_end",
+					Data: "1",
 				}
 				err := c.WriteJSON(message)
 				if err != nil {
@@ -196,10 +197,22 @@ func main() {
 					close(done)
 					return
 				}
-				log.Println("exit_course request sent")
+				log.Println("course_end request sent")
+
+			case "5":
+				message := Message{
+					Type: "course_exit",
+				}
+				err := c.WriteJSON(message)
+				if err != nil {
+					log.Printf("write error: %v", err)
+					close(done)
+					return
+				}
+				log.Println("course_exit request sent")
 
 			default:
-				log.Println("Invalid input. Press '1' for course selection, '2' for course mode selection, '3' for object manipulation, '4' for course exit")
+				log.Println("Invalid input. Press '1' for course selection, '2' for course mode selection, '3' for object manipulation, '4' for course end, '5' for course exit")
 			}
 		}
 	}()
@@ -234,15 +247,15 @@ func handleObjectManipulation(data interface{}) {
 		return
 	}
 
-	// 获取 dataAttachment
-	dataAttachment, ok := dataMap["dataAttachment"].(map[string]interface{})
-	if !ok {
-		log.Println("Invalid dataAttachment format")
-		return
-	}
+	// // 获取 dataAttachment
+	// dataAttachment, ok := dataMap["data"].(map[string]interface{})
+	// if !ok {
+	// 	log.Println(fmt.Sprintf("Invalid dataAttachment format:%+v %t", dataMap["data"], dataMap["data"]))
+	// 	return
+	// }
 
 	// 遍历所有物体
-	for objectIDStr, objectData := range dataAttachment {
+	for objectIDStr, objectData := range dataMap {
 		objectID, err := strconv.ParseInt(objectIDStr, 10, 32)
 		if err != nil {
 			log.Printf("Invalid object ID: %s", objectIDStr)

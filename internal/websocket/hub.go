@@ -2,12 +2,15 @@ package websocket
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
+
+	// "strconv"
 	"sync"
 	"time"
 
-	"xnfz/api/websocket"
+	"xnfz/api"
 	"xnfz/internal/course"
 	e "xnfz/internal/errors"
 	"xnfz/internal/session"
@@ -25,10 +28,10 @@ const (
 	maxMessageSize = 512                 // 最大消息大小
 )
 
-var (
-	newline = []byte{'\n'}
-	space   = []byte{' '}
-)
+// var (
+// 	newline = []byte{'\n'}
+// 	space   = []byte{' '}
+// )
 
 // 更新 Message 结构体以包含 code 字段
 type Message struct {
@@ -53,10 +56,10 @@ var upgrader = websocket.Upgrader{
 
 // CourseDetail 存储课程详情
 type CourseDetail struct {
-	CourseID       string                `json:"courseId"`
-	Mode           int32                 `json:"mode"`
-	DataAttachment map[int32]interface{} `json:"dataAttachment"`
-	mu             sync.RWMutex
+	CourseID string                `json:"courseId"`
+	Mode     int32                 `json:"mode"`
+	Data     map[int32]interface{} `json:"data"`
+	mu       sync.RWMutex
 }
 
 // GetDataAttachment 安全地获取 DataAttachment
@@ -64,7 +67,7 @@ func (cd *CourseDetail) GetDataAttachment() map[int32]interface{} {
 	cd.mu.RLock()
 	defer cd.mu.RUnlock()
 	result := make(map[int32]interface{})
-	for k, v := range cd.DataAttachment {
+	for k, v := range cd.Data {
 		result[k] = v
 	}
 	return result
@@ -74,7 +77,7 @@ func (cd *CourseDetail) GetDataAttachment() map[int32]interface{} {
 func (cd *CourseDetail) UpdateDataAttachment(update func(map[int32]interface{})) {
 	cd.mu.Lock()
 	defer cd.mu.Unlock()
-	update(cd.DataAttachment)
+	update(cd.Data)
 }
 
 // Client 表示一个 WebSocket 客户端连接
@@ -110,7 +113,7 @@ func NewHub(sessions *session.Manager, courses *course.Manager, logger *zap.Logg
 		courses:    courses,
 		logger:     logger,
 		courseDetail: &CourseDetail{
-			DataAttachment: make(map[int32]interface{}),
+			Data: make(map[int32]interface{}),
 		},
 	}
 }
@@ -175,16 +178,18 @@ func (c *Client) readPump() {
 		}
 
 		switch msg.Type {
-		case protocol.HeartbeatMessage:
+		case protocol.Heartbeat:
 			c.handleHeartbeat()
-		case protocol.CourseSelectionMessage:
-			c.handleCourseSelection(msg.Data)
-		case protocol.CourseModeSelectionMessage:
-			c.handleCourseModeSelection(msg.Data)
-		case protocol.ObjectManipulationMessage:
-			c.handleObjectManipulation(msg.Data)
-		case protocol.CourseExitMessage:
-			c.handleExitCourse()
+		case protocol.CourseSelection:
+			c.handleCourseSelection(c.user.ID, msg.Data)
+		case protocol.CourseModeSelection:
+			c.handleCourseModeSelection(c.user.ID, msg.Data)
+		case protocol.ObjectManipulation:
+			c.handleObjectManipulation(c.user.ID, msg.Data)
+		case protocol.CourseEnd:
+			c.handleEndCourse(c.user.ID, msg.Data)
+		case protocol.CourseExit:
+			c.handleExitCourse(c.user.ID)
 		}
 	}
 }
@@ -207,35 +212,23 @@ func authenticateUser(r *http.Request) *models.User {
 // handleHeartbeat 处理心跳消息
 func (c *Client) handleHeartbeat() {
 	response := protocol.Message{
-		Type: protocol.HeartbeatResponseMessage,
+		Type: protocol.HeartbeatResponse,
 		Data: "pong",
 	}
 	c.send <- marshalMessage(response)
 }
 
 // handleCourseSelection 处理课程选择消息
-func (c *Client) handleCourseSelection(data interface{}) {
+func (c *Client) handleCourseSelection(deviceCode string, data interface{}) {
 	courseData, ok := data.(map[string]interface{})
 	if !ok {
-		c.hub.logger.Error("Invalid course selection data")
-		response := protocol.Message{
-			Type: protocol.ErrorMessage,
-			Code: e.ErrInvalidData.Code,
-			Data: e.ErrInvalidData.Message,
-		}
-		c.send <- marshalMessage(response)
+		c.sendErrorResponse(e.ErrCourseNotFound)
 		return
 	}
 
 	courseID, ok := courseData["courseId"].(string)
 	if !ok {
-		c.hub.logger.Error("Invalid course ID")
-		response := protocol.Message{
-			Type: protocol.ErrorMessage,
-			Code: e.ErrInvalidData.Code,
-			Data: e.ErrInvalidData.Message,
-		}
-		c.send <- marshalMessage(response)
+		c.sendErrorResponse(e.ErrCourseNotFound)
 		return
 	}
 
@@ -250,61 +243,43 @@ func (c *Client) handleCourseSelection(data interface{}) {
 	c.hub.courseDetail.CourseID = courseID
 
 	response := protocol.Message{
-		Type: protocol.CourseSelectedMessage,
+		Type: protocol.CourseSelected,
 		Data: map[string]interface{}{
 			"courseId": courseID,
 		},
+	}
+	if deviceCode == c.user.ID {
+		response.DeviceCode = deviceCode
 	}
 	c.hub.broadcast <- marshalMessage(response)
 }
 
 // handleCourseModeSelection 处理课程模式选择消息
-func (c *Client) handleCourseModeSelection(data interface{}) {
+func (c *Client) handleCourseModeSelection(deviceCode string, data interface{}) {
 	courseData, ok := data.(map[string]interface{})
 	if !ok {
-		c.hub.logger.Error("Invalid course selection data")
-		response := protocol.Message{
-			Type: protocol.ErrorMessage,
-			Code: e.ErrInvalidData.Code,
-			Data: e.ErrInvalidData.Message,
-		}
-		c.send <- marshalMessage(response)
+		c.sendErrorResponse(e.ErrCourseNotFound)
 		return
 	}
 
 	courseID, ok := courseData["courseId"].(string)
 	if !ok {
 		c.hub.logger.Error("Invalid course ID")
-		response := protocol.Message{
-			Type: protocol.ErrorMessage,
-			Code: e.ErrInvalidData.Code,
-			Data: e.ErrInvalidData.Message,
-		}
-		c.send <- marshalMessage(response)
+		c.sendErrorResponse(e.ErrCourseNotFound)
 		return
 	}
 
 	mode, ok := courseData["mode"].(float64)
 	if !ok {
 		c.hub.logger.Error("Invalid course mode")
-		response := protocol.Message{
-			Type: protocol.ErrorMessage,
-			Code: e.ErrInvalidData.Code,
-			Data: e.ErrInvalidData.Message,
-		}
-		c.send <- marshalMessage(response)
+		c.sendErrorResponse(e.ErrCourseNotFound)
 		return
 	}
 
 	course, found := c.hub.courses.GetCourse(courseID)
 	if !found {
 		c.hub.logger.Error("Course not found", zap.String("courseID", courseID))
-		response := protocol.Message{
-			Type: protocol.ErrorMessage,
-			Code: e.ErrCourseNotFound.Code,
-			Data: e.ErrCourseNotFound.Message,
-		}
-		c.send <- marshalMessage(response)
+		c.sendErrorResponse(e.ErrInvalidData)
 		return
 	}
 
@@ -320,61 +295,65 @@ func (c *Client) handleCourseModeSelection(data interface{}) {
 	c.hub.courseDetail.Mode = int32(mode)
 
 	response := protocol.Message{
-		Type: protocol.CourseStartMessage,
+		Type: protocol.CourseStart,
 		Data: map[string]interface{}{
 			"courseId": courseID,
 			"mode":     course.Mode,
 		},
 	}
+	if deviceCode == c.user.ID {
+		response.DeviceCode = deviceCode
+	}
 	c.hub.broadcast <- marshalMessage(response)
 }
 
 // handleObjectManipulation 处理对象操作消息
-func (c *Client) handleObjectManipulation(data interface{}) {
-	manipulationData, ok := data.(map[string]interface{})
+func (c *Client) handleObjectManipulation(deviceCode string, data interface{}) {
+	// c.hub.logger.Info(fmt.Sprintf("manipulation data:%+v", data))
+
+	dataMap, ok := data.(map[string]interface{})
 	if !ok {
-		c.hub.logger.Error("Invalid object manipulation data")
-		response := protocol.Message{
-			Type: protocol.ErrorMessage,
-			Code: e.ErrInvalidData.Code,
-			Data: e.ErrInvalidData.Message,
-		}
-		c.send <- marshalMessage(response)
+		c.hub.logger.Error("Invalid data format")
+		c.sendErrorResponse(e.ErrInvalidData)
 		return
 	}
 
-	dataAttachment, ok := manipulationData["dataAttachment"].(map[string]interface{})
-	if !ok {
-		c.hub.logger.Error("Invalid dataAttachment")
-		response := protocol.Message{
-			Type: protocol.ErrorMessage,
-			Code: e.ErrInvalidData.Code,
-			Data: e.ErrInvalidData.Message,
+	// dataAttachment, ok := dataMap["dataAttachment"].(map[string]interface{})
+	// if !ok {
+	// 	c.hub.logger.Error("Invalid dataAttachment format")
+	// 	c.sendErrorResponse(e.ErrInvalidData)
+	// 	return
+	// }
+
+	processedData := make(map[int32]interface{})
+
+	for key, value := range dataMap {
+		intKey, err := strconv.ParseInt(key, 10, 32)
+		if err != nil {
+			c.hub.logger.Error(fmt.Sprintf("Invalid key: %s", key))
+			continue
 		}
-		c.send <- marshalMessage(response)
-		return
+		processedData[int32(intKey)] = value
 	}
 
-	c.hub.courseDetail.UpdateDataAttachment(func(currentDataAttachment map[int32]interface{}) {
-		for k, v := range dataAttachment {
-			key, err := strconv.ParseInt(k, 10, 32)
-			if err != nil {
-				c.hub.logger.Error("Invalid key in dataAttachment", zap.Error(err))
-				continue
-			}
-			currentDataAttachment[int32(key)] = v
-		}
-	})
+	// Now processedData is of type map[int32]interface{}
+	// Continue with your logic here
+	c.hub.logger.Info(fmt.Sprintf("Processed data: %+v", processedData))
 
+	// Example: Broadcast the processed data
 	response := protocol.Message{
-		Type: protocol.ObjectManipulationMessage,
-		Data: manipulationData,
+		Type: protocol.ObjectManipulation,
+		// DeviceCode: c.user.ID,
+		Data: processedData,
+	}
+	if deviceCode == c.user.ID {
+		response.DeviceCode = deviceCode
 	}
 	c.hub.broadcast <- marshalMessage(response)
 }
 
-// handleExitCourse 处理退出课程消息
-func (c *Client) handleExitCourse() {
+// handleExitCourse 处理结束课程消息
+func (c *Client) handleEndCourse(deviceCode string, data interface{}) {
 	if c.session != nil {
 		c.hub.sessions.EndSession(c.session.ID)
 		c.session = nil
@@ -389,14 +368,54 @@ func (c *Client) handleExitCourse() {
 	})
 
 	response := protocol.Message{
-		Type: protocol.CourseExitMessage,
-		Data: "Course exited",
+		Type: protocol.CourseEnd,
+		Data: data,
+	}
+	if deviceCode == c.user.ID {
+		response.DeviceCode = deviceCode
+	}
+	c.hub.broadcast <- marshalMessage(response)
+
+	c.hub.logger.Info("Course end and courseDetail cleared",
+		zap.String("user", c.user.ID),
+		zap.String("deviceCode", c.user.ID))
+}
+
+// handleExitCourse 处理退出课程消息
+func (c *Client) handleExitCourse(deviceCode string) {
+	if c.session != nil {
+		c.hub.sessions.EndSession(c.session.ID)
+		c.session = nil
+	}
+
+	c.hub.courseDetail.CourseID = ""
+	c.hub.courseDetail.Mode = 0
+	c.hub.courseDetail.UpdateDataAttachment(func(dataAttachment map[int32]interface{}) {
+		for k := range dataAttachment {
+			delete(dataAttachment, k)
+		}
+	})
+
+	response := protocol.Message{
+		Type: protocol.CourseExit,
+	}
+	if deviceCode == c.user.ID {
+		response.DeviceCode = deviceCode
 	}
 	c.hub.broadcast <- marshalMessage(response)
 
 	c.hub.logger.Info("Course exited and courseDetail cleared",
 		zap.String("user", c.user.ID),
 		zap.String("deviceCode", c.user.ID))
+}
+
+func (c *Client) sendErrorResponse(err e.ErrorMessage) {
+	response := protocol.Message{
+		Type: protocol.ErrorMessage,
+		Code: err.Code,
+		Data: err.Message,
+	}
+	c.send <- marshalMessage(response)
 }
 
 // // startPracticeTimer 启动实践模式计时器
@@ -447,7 +466,7 @@ func ServeWs(hub *Hub, w http.ResponseWriter, r *http.Request) {
 
 	if hub.courseDetail.CourseID != "" {
 		detailMessage := protocol.Message{
-			Type: protocol.CourseDetailMessage,
+			Type: protocol.CourseDetail,
 			Data: hub.courseDetail,
 		}
 		client.send <- marshalMessage(detailMessage)
@@ -469,6 +488,7 @@ func (c *Client) writePump() {
 		case message, ok := <-c.send:
 			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if !ok {
+				// 通道已关闭
 				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
@@ -479,15 +499,24 @@ func (c *Client) writePump() {
 			}
 			w.Write(message)
 
-			n := len(c.send)
-			for i := 0; i < n; i++ {
-				w.Write(newline)
-				w.Write(<-c.send)
-			}
-
+			// 立即关闭写入器，发送这条消息
 			if err := w.Close(); err != nil {
 				return
 			}
+
+			// 检查是否有更多消息等待发送
+			n := len(c.send)
+			for i := 0; i < n; i++ {
+				w, err := c.conn.NextWriter(websocket.TextMessage)
+				if err != nil {
+					return
+				}
+				w.Write(<-c.send)
+				if err := w.Close(); err != nil {
+					return
+				}
+			}
+
 		case <-ticker.C:
 			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {

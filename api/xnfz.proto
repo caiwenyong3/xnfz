@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+import "google/protobuf/any.proto";
+
+package protocol;
+option go_package = "/protocol";
+
+// 定义消息类型
+enum MessageType {
+    Heartbeat = 0;
+    HeartbeatResponse = 1;
+    ErrorMessage = 2;
+ 
+    CourseDetail = 10001;
+    CourseSelection = 10002;
+    CourseSelected = 10003;
+    CourseModeSelection = 10004;
+    CourseStart = 10005;
+    CourseEnd = 10006;
+    CourseExit = 10007;
+    ObjectManipulation = 10008;
+}
+
+// 错误消息
+message ErrMessage {
+    int32 code = 1;
+    string message = 2;
+}
+
+// 通用消息
+message Message {
+    MessageType type = 1;
+    string deviceCode = 2;
+    google.protobuf.Any data = 3;
+}
